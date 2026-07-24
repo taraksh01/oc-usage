@@ -165,11 +165,11 @@ const plugin: TuiPluginModule = {
             const parts: string[] = []
             if (cum.totalInput > 0 || cum.totalOutput > 0) {
               parts.push(`\u2191${fmt(cum.totalInput)}`)
-              if (cum.currentInput > 0) parts.push(`[${fmt(cum.currentInput)}]`)
+              parts.push(`[${fmt(cum.currentInput)}]`)
               if (cum.cacheRead > 0) parts.push(`\u21BB ${fmt(cum.cacheRead)}`)
               let output = `\u2193${fmt(cum.totalOutput)}`
               if (stream && stream.tokens > 0) output += ` [${fmt(stream.tokens)}]`
-              else if (cum.currentOutput > 0) output += ` [${fmt(cum.currentOutput)}]`
+              else output += ` [${fmt(cum.currentOutput)}]`
               parts.push(output)
               parts.push(`$${cum.totalCost.toFixed(4)}`)
             }
