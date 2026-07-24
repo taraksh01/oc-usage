@@ -58,6 +58,8 @@ const plugin: TuiPluginModule = {
     const [streams, setStreams] = createSignal<Map<string, StreamState>>(new Map())
     const [lastTPS, setLastTPS] = createSignal(0)
     const [lastAvgTPS, setLastAvgTPS] = createSignal(0)
+    const [currentInput, setCurrentInput] = createSignal(0)
+    const [currentOutput, setCurrentOutput] = createSignal(0)
     const partText = new Map<string, string>()
 
     function recordDelta(sid: string, delta: number) {
@@ -108,14 +110,18 @@ const plugin: TuiPluginModule = {
       if (info.role !== "assistant") return
       if (!info.time.completed) return
       const prev = cumulative()
+      const newInput = info.tokens.input || 0
+      const newOutput = info.tokens.output || 0
+      setCurrentInput(newInput - prev.totalInput)
+      setCurrentOutput(newOutput)
       const prevStream = streams().get(info.sessionID)
       if (prevStream) {
         setLastTPS(instantTPS(prevStream.buffer))
         setLastAvgTPS(avgTPS(prevStream.tokens, prevStream.start))
       }
       const t = {
-        totalInput: info.tokens.input || 0,
-        totalOutput: prev.totalOutput + (info.tokens.output || 0),
+        totalInput: newInput,
+        totalOutput: prev.totalOutput + newOutput,
         totalCost: prev.totalCost + (info.cost || 0),
         cacheRead: prev.cacheRead + (info.tokens.cache?.read || 0),
       }
@@ -143,9 +149,11 @@ const plugin: TuiPluginModule = {
             const parts: string[] = []
             if (cum.totalInput > 0 || cum.totalOutput > 0) {
               parts.push(`\u2191${fmt(cum.totalInput)}`)
+              if (currentInput() > 0) parts.push(`[${fmt(currentInput())}]`)
               if (cum.cacheRead > 0) parts.push(`\u21BB ${fmt(cum.cacheRead)}`)
               let output = `\u2193${fmt(cum.totalOutput)}`
               if (stream && stream.tokens > 0) output += ` [${fmt(stream.tokens)}]`
+              else if (currentOutput() > 0) output += ` [${fmt(currentOutput())}]`
               parts.push(output)
               parts.push(`$${cum.totalCost.toFixed(4)}`)
             }
