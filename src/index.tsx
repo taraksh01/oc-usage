@@ -8,20 +8,17 @@ function fmt(n: number): string {
   return String(n)
 }
 
-function fmtCost(c: number): string {
-  if (c >= 0.01) return "$" + c.toFixed(3)
-  if (c > 0) return "$" + c.toFixed(4)
-  return ""
-}
-
 function countTokens(text: string): number {
   return Math.ceil(text.length / 4)
 }
 
 interface SessionTotals {
-  input: number
-  output: number
-  cost: number
+  totalInput: number
+  currentInput: number
+  totalOutput: number
+  currentOutput: number
+  totalCost: number
+  currentCost: number
   cacheRead: number
 }
 
@@ -56,12 +53,11 @@ const plugin: TuiPluginModule = {
     const [totals, setTotals] = createSignal<Map<string, SessionTotals>>(new Map())
     const [streams, setStreams] = createSignal<Map<string, StreamState>>(new Map())
     const partText = new Map<string, string>()
-    const currentMessage = new Map<string, string>()
 
     function getTotals(sid: string): SessionTotals {
       const m = totals()
       let t = m.get(sid)
-      if (!t) { t = { input: 0, output: 0, cost: 0, cacheRead: 0 }; setTotals(p => { const n = new Map(p); n.set(sid, t!); return n }) }
+      if (!t) { t = { totalInput: 0, currentInput: 0, totalOutput: 0, currentOutput: 0, totalCost: 0, currentCost: 0, cacheRead: 0 }; setTotals(p => { const n = new Map(p); n.set(sid, t!); return n }) }
       return t
     }
 
@@ -91,7 +87,6 @@ const plugin: TuiPluginModule = {
       if (event.properties.field !== "text") return
       const { sessionID, messageID, partID, delta } = event.properties
       if (!delta) return
-      currentMessage.set(sessionID, messageID)
       const key = `${sessionID}:${messageID}:${partID}`
       const prev = partText.get(key) ?? ""
       partText.set(key, prev + delta)
@@ -120,11 +115,15 @@ const plugin: TuiPluginModule = {
       const info = event.properties.info
       if (info.role !== "assistant") return
       if (!info.time.completed) return
-      currentMessage.delete(info.sessionID)
       const t = getTotals(info.sessionID)
-      t.input = info.tokens.input || 0
-      t.output += info.tokens.output || 0
-      t.cost += info.cost || 0
+      const newInput = info.tokens.input || 0
+      const newOutput = info.tokens.output || 0
+      t.currentInput = newInput - t.totalInput
+      t.totalInput = newInput
+      t.currentOutput = newOutput
+      t.totalOutput += newOutput
+      t.currentCost = info.cost || 0
+      t.totalCost += info.cost || 0
       t.cacheRead += info.tokens.cache?.read || 0
       setTotals(p => { const n = new Map(p); n.set(info.sessionID, t); return n })
       setStreams(p => { const n = new Map(p); n.delete(info.sessionID); return n })
@@ -134,7 +133,6 @@ const plugin: TuiPluginModule = {
       const sid = event.properties.sessionID
       if (!sid) return
       setStreams(p => { const n = new Map(p); n.delete(sid); return n })
-      currentMessage.delete(sid)
     }))
 
     api.slots.register({
@@ -149,10 +147,19 @@ const plugin: TuiPluginModule = {
             const stream = s()
             const parts: string[] = []
             if (totals) {
-              parts.push(`\u2192${fmt(totals.input)}`)
+              let input = `\u2191${fmt(totals.totalInput)}`
+              if (totals.currentInput > 0) input += ` [${fmt(totals.currentInput)}]`
+              parts.push(input)
               if (totals.cacheRead > 0) parts.push(`\u21BB${fmt(totals.cacheRead)}`)
-              parts.push(`\u2190${fmt(totals.output)}`)
-              if (totals.cost > 0) parts.push(fmtCost(totals.cost))
+              let output = `\u2193${fmt(totals.totalOutput)}`
+              if (totals.currentOutput > 0) output += ` [${fmt(totals.currentOutput)}]`
+              else if (stream && stream.tokens > 0) output += ` [${fmt(stream.tokens)}]`
+              parts.push(output)
+              if (totals.totalCost > 0) {
+                let cost = `$${totals.totalCost.toFixed(4)}`
+                if (totals.currentCost > 0) cost += ` [$${totals.currentCost.toFixed(4)}]`
+                parts.push(cost)
+              }
             }
             if (stream && stream.tokens > 0) {
               const inst = instantTPS(stream.buffer)
@@ -165,7 +172,7 @@ const plugin: TuiPluginModule = {
           const txt = text()
           return (
             <Show when={txt}>
-              <box flexShrink={0} flexDirection="row">
+              <box flexDirection="row">
                 <text>{txt}</text>
               </box>
             </Show>
@@ -177,7 +184,6 @@ const plugin: TuiPluginModule = {
     api.lifecycle.onDispose(() => {
       for (const d of disposers) d()
       partText.clear()
-      currentMessage.clear()
       setTotals(new Map())
       setStreams(new Map())
     })
