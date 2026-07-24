@@ -19,6 +19,7 @@ interface Cumulative {
   cacheRead: number
   currentInput: number
   currentOutput: number
+  currentCache: number
   lastTPS: number
   lastAvgTPS: number
 }
@@ -49,7 +50,7 @@ function avgTPS(tokens: number, start: number): number {
 }
 
 function emptyCumulative(): Cumulative {
-  return { totalInput: 0, totalOutput: 0, totalCost: 0, cacheRead: 0, currentInput: 0, currentOutput: 0, lastTPS: 0, lastAvgTPS: 0 }
+  return { totalInput: 0, totalOutput: 0, totalCost: 0, cacheRead: 0, currentInput: 0, currentOutput: 0, currentCache: 0, lastTPS: 0, lastAvgTPS: 0 }
 }
 
 function kvKey(sid: string): string {
@@ -127,13 +128,15 @@ const plugin: TuiPluginModule = {
       const newInput = info.tokens.input || 0
       const newOutput = (info.tokens.output || 0) + (info.tokens.reasoning || 0)
       const prevStream = streams().get(sid)
+      const cacheHit = info.tokens.cache?.read || 0
       const t = {
         totalInput: prev.totalInput + newInput,
         currentInput: newInput,
         totalOutput: prev.totalOutput + newOutput,
         currentOutput: newOutput,
         totalCost: prev.totalCost + (info.cost || 0),
-        cacheRead: prev.cacheRead + (info.tokens.cache?.read || 0),
+        cacheRead: prev.cacheRead + cacheHit,
+        currentCache: cacheHit,
         lastTPS: prevStream ? instantTPS(prevStream.buffer) : 0,
         lastAvgTPS: prevStream ? avgTPS(prevStream.tokens, prevStream.start) : 0,
       }
@@ -167,7 +170,11 @@ const plugin: TuiPluginModule = {
             if (cum.totalInput > 0 || cum.totalOutput > 0) {
               parts.push(`\u2191${fmt(cum.totalInput)}`)
               parts.push(`[${fmt(cum.currentInput)}]`)
-              if (cum.cacheRead > 0) parts.push(`\u21BB ${fmt(cum.cacheRead)}`)
+              if (cum.cacheRead > 0) {
+                let cache = `\u21BB ${fmt(cum.cacheRead)}`
+                if (cum.currentCache > 0) cache += ` [${fmt(cum.currentCache)}]`
+                parts.push(cache)
+              }
               let output = `\u2193${fmt(cum.totalOutput)}`
               if (stream && stream.tokens > 0) output += ` [${fmt(stream.tokens)}]`
               else output += ` [${fmt(cum.currentOutput)}]`
