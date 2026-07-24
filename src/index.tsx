@@ -2,6 +2,8 @@
 import { createSignal, createMemo, Show } from "solid-js"
 import type { TuiPluginModule, TuiPluginApi } from "@opencode-ai/plugin/tui"
 
+const KV_KEY = "oc-usage/cumulative"
+
 function fmt(n: number): string {
   if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + "M"
   if (n >= 1_000) return (n / 1_000).toFixed(1) + "K"
@@ -12,16 +14,11 @@ function countTokens(text: string): number {
   return Math.ceil(text.length / 4)
 }
 
-interface SessionTotals {
+interface Cumulative {
   totalInput: number
-  currentInput: number
   totalOutput: number
-  currentOutput: number
   totalCost: number
-  currentCost: number
   cacheRead: number
-  lastTPS: number
-  lastAvgTPS: number
 }
 
 interface StreamState {
@@ -49,11 +46,18 @@ function avgTPS(tokens: number, start: number): number {
   return elapsed > 0 ? tokens / elapsed : 0
 }
 
+function emptyCumulative(): Cumulative {
+  return { totalInput: 0, totalOutput: 0, totalCost: 0, cacheRead: 0 }
+}
+
 const plugin: TuiPluginModule = {
   id: "oc-usage",
   tui: async (api: TuiPluginApi) => {
-    const [totals, setTotals] = createSignal<Map<string, SessionTotals>>(new Map())
+    const initial = api.kv.ready ? (api.kv.get<Cumulative>(KV_KEY) ?? emptyCumulative()) : emptyCumulative()
+    const [cumulative, setCumulative] = createSignal<Cumulative>(initial)
     const [streams, setStreams] = createSignal<Map<string, StreamState>>(new Map())
+    const [lastTPS, setLastTPS] = createSignal(0)
+    const [lastAvgTPS, setLastAvgTPS] = createSignal(0)
     const partText = new Map<string, string>()
 
     function recordDelta(sid: string, delta: number) {
@@ -103,24 +107,20 @@ const plugin: TuiPluginModule = {
       const info = event.properties.info
       if (info.role !== "assistant") return
       if (!info.time.completed) return
+      const prev = cumulative()
       const prevStream = streams().get(info.sessionID)
-      const lastTPS = prevStream ? instantTPS(prevStream.buffer) : 0
-      const lastAvgTPS = prevStream ? avgTPS(prevStream.tokens, prevStream.start) : 0
-      const prev = totals().get(info.sessionID)
-      const newInput = info.tokens.input || 0
-      const newOutput = info.tokens.output || 0
-      const t = {
-        totalInput: newInput,
-        currentInput: newInput - (prev?.totalInput ?? 0),
-        totalOutput: (prev?.totalOutput ?? 0) + newOutput,
-        currentOutput: newOutput,
-        totalCost: (prev?.totalCost ?? 0) + (info.cost || 0),
-        currentCost: info.cost || 0,
-        cacheRead: (prev?.cacheRead ?? 0) + (info.tokens.cache?.read || 0),
-        lastTPS,
-        lastAvgTPS,
+      if (prevStream) {
+        setLastTPS(instantTPS(prevStream.buffer))
+        setLastAvgTPS(avgTPS(prevStream.tokens, prevStream.start))
       }
-      setTotals(p => { const n = new Map(p); n.set(info.sessionID, t); return n })
+      const t = {
+        totalInput: info.tokens.input || 0,
+        totalOutput: prev.totalOutput + (info.tokens.output || 0),
+        totalCost: prev.totalCost + (info.cost || 0),
+        cacheRead: prev.cacheRead + (info.tokens.cache?.read || 0),
+      }
+      setCumulative(t)
+      if (api.kv.ready) api.kv.set(KV_KEY, t)
       setStreams(p => { const n = new Map(p); n.delete(info.sessionID); return n })
     }))
 
@@ -135,35 +135,30 @@ const plugin: TuiPluginModule = {
       slots: {
         session_prompt_right(_ctx, props) {
           const sid = props.session_id
-          const t = createMemo(() => totals().get(sid))
+          const c = cumulative
           const s = createMemo(() => streams().get(sid))
           const text = createMemo(() => {
-            const totals = t()
+            const cum = c()
             const stream = s()
             const parts: string[] = []
-            if (totals) {
-              let input = `\u2191${fmt(totals.totalInput)}`
-              if (totals.currentInput > 0) input += ` [${fmt(totals.currentInput)}]`
-              parts.push(input)
-              if (totals.cacheRead > 0) parts.push(`\u21BB ${fmt(totals.cacheRead)}`)
-              let output = `\u2193${fmt(totals.totalOutput)}`
-              if (totals.currentOutput > 0) output += ` [${fmt(totals.currentOutput)}]`
-              else if (stream && stream.tokens > 0) output += ` [${fmt(stream.tokens)}]`
+            if (cum.totalInput > 0 || cum.totalOutput > 0) {
+              parts.push(`\u2191${fmt(cum.totalInput)}`)
+              if (cum.cacheRead > 0) parts.push(`\u21BB ${fmt(cum.cacheRead)}`)
+              let output = `\u2193${fmt(cum.totalOutput)}`
+              if (stream && stream.tokens > 0) output += ` [${fmt(stream.tokens)}]`
               parts.push(output)
-              if (totals.totalCost > 0) {
-                let cost = `$${totals.totalCost.toFixed(4)}`
-                if (totals.currentCost > 0) cost += ` [$${totals.currentCost.toFixed(4)}]`
-                parts.push(cost)
-              }
+              parts.push(`$${cum.totalCost.toFixed(4)}`)
             }
             if (stream && stream.tokens > 0) {
               const inst = instantTPS(stream.buffer)
               const avg = avgTPS(stream.tokens, stream.start)
               if (inst > 0) parts.push(`\u26A1${inst.toFixed(0)}`)
               if (avg > 0) parts.push(`\u2205 ${avg.toFixed(0)}`)
-            } else if (totals && totals.lastAvgTPS > 0) {
-              if (totals.lastTPS > 0) parts.push(`\u26A1${totals.lastTPS.toFixed(0)}`)
-              parts.push(`\u2205 ${totals.lastAvgTPS.toFixed(0)}`)
+            } else if (cum.totalOutput > 0) {
+              const lt = lastTPS()
+              const la = lastAvgTPS()
+              if (lt > 0) parts.push(`\u26A1${lt.toFixed(0)}`)
+              if (la > 0) parts.push(`\u2205 ${la.toFixed(0)}`)
             }
             return parts.length > 0 ? parts.join(" ") : ""
           })
@@ -181,8 +176,8 @@ const plugin: TuiPluginModule = {
 
     api.lifecycle.onDispose(() => {
       for (const d of disposers) d()
+      if (api.kv.ready) api.kv.set(KV_KEY, cumulative())
       partText.clear()
-      setTotals(new Map())
       setStreams(new Map())
     })
   },
