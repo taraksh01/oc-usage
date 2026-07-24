@@ -1,0 +1,33 @@
+{
+  "name": "oc-usage",
+  "version": "0.1.0",
+  "description": "OpenCode plugin — live token usage, cost, and TPS display",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsup",
+    "clean": "rm -rf dist",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": ["opencode", "opencode-plugin", "tokens", "tps", "cost"],
+  "license": "MIT",
+  "peerDependencies": {
+    "@opencode-ai/plugin": "*"
+  },
+  "devDependencies": {
+    "@opencode-ai/plugin": "^1.15.6",
+    "@opentui/solid": "^0.4.3",
+    "@types/node": "^22",
+    "solid-js": "^1.9.12",
+    "tsup": "^8.5.1",
+    "typescript": "^5.9"
+  }
+}
