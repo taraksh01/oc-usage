@@ -46,7 +46,8 @@ function instantTPS(buffer: Array<{ ts: number; count: number }>): number {
 
 function avgTPS(tokens: number, start: number): number {
   const elapsed = (Date.now() - start) / 1000
-  return elapsed > 0 ? tokens / elapsed : 0
+  if (elapsed < MIN_DUR) return 0
+  return tokens / elapsed
 }
 
 function emptyCumulative(): Cumulative {
@@ -167,28 +168,26 @@ const plugin: TuiPluginModule = {
             const cum = c()
             const stream = s()
             const parts: string[] = []
-            if (cum.totalInput > 0 || cum.totalOutput > 0) {
-              parts.push(`\u2191${fmt(cum.totalInput)}`)
-              parts.push(`[${fmt(cum.currentInput)}]`)
-              if (cum.cacheRead > 0) {
-                let cache = `\u21BB ${fmt(cum.cacheRead)}`
-                if (cum.currentCache > 0) cache += ` [${fmt(cum.currentCache)}]`
-                parts.push(cache)
-              }
-              let output = `\u2193${fmt(cum.totalOutput)}`
-              if (stream && stream.tokens > 0) output += ` [${fmt(stream.tokens)}]`
-              else output += ` [${fmt(cum.currentOutput)}]`
-              parts.push(output)
-              parts.push(`$${cum.totalCost.toFixed(4)}`)
+            parts.push(`\u2191${fmt(cum.totalInput)}`)
+            parts.push(`[${fmt(cum.currentInput)}]`)
+            if (cum.cacheRead > 0) {
+              let cache = `\u21BB ${fmt(cum.cacheRead)}`
+              if (cum.currentCache > 0) cache += ` [${fmt(cum.currentCache)}]`
+              parts.push(cache)
             }
-            if (stream && stream.tokens > 0) {
+            let output = `\u2193${fmt(cum.totalOutput)}`
+            if (stream && stream.tokens >= 0) output += ` [${fmt(stream.tokens)}]`
+            else output += ` [${fmt(cum.currentOutput)}]`
+            parts.push(output)
+            parts.push(`$${cum.totalCost.toFixed(4)}`)
+            if (stream && stream.tokens >= 0) {
               const inst = instantTPS(stream.buffer)
               const avg = avgTPS(stream.tokens, stream.start)
-              if (inst > 0) parts.push(`\u26A1${inst.toFixed(0)}`)
-              if (avg > 0) parts.push(`\u2205 ${avg.toFixed(0)}`)
-            } else if (cum.totalOutput > 0) {
-              if (cum.lastTPS > 0) parts.push(`\u26A1${cum.lastTPS.toFixed(0)}`)
-              if (cum.lastAvgTPS > 0) parts.push(`\u2205 ${cum.lastAvgTPS.toFixed(0)}`)
+              parts.push(`\u26A1${inst.toFixed(0)}`)
+              parts.push(`\u2205 ${avg.toFixed(0)}`)
+            } else {
+              parts.push(`\u26A1${cum.lastTPS.toFixed(0)}`)
+              parts.push(`\u2205 ${cum.lastAvgTPS.toFixed(0)}`)
             }
             return parts.length > 0 ? parts.join(" ") : ""
           })
