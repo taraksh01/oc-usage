@@ -2,8 +2,6 @@
 import { createSignal, createMemo, Show } from "solid-js"
 import type { TuiPluginModule, TuiPluginApi } from "@opencode-ai/plugin/tui"
 
-const KV_KEY = "oc-usage/cumulative"
-
 function fmt(n: number): string {
   if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + "M"
   if (n >= 1_000) return (n / 1_000).toFixed(1) + "K"
@@ -19,6 +17,10 @@ interface Cumulative {
   totalOutput: number
   totalCost: number
   cacheRead: number
+  currentInput: number
+  currentOutput: number
+  lastTPS: number
+  lastAvgTPS: number
 }
 
 interface StreamState {
@@ -47,20 +49,28 @@ function avgTPS(tokens: number, start: number): number {
 }
 
 function emptyCumulative(): Cumulative {
-  return { totalInput: 0, totalOutput: 0, totalCost: 0, cacheRead: 0 }
+  return { totalInput: 0, totalOutput: 0, totalCost: 0, cacheRead: 0, currentInput: 0, currentOutput: 0, lastTPS: 0, lastAvgTPS: 0 }
+}
+
+function kvKey(sid: string): string {
+  return `oc-usage/${sid}`
 }
 
 const plugin: TuiPluginModule = {
   id: "oc-usage",
   tui: async (api: TuiPluginApi) => {
-    const initial = api.kv.ready ? (api.kv.get<Cumulative>(KV_KEY) ?? emptyCumulative()) : emptyCumulative()
-    const [cumulative, setCumulative] = createSignal<Cumulative>(initial)
+    const [totals, setTotals] = createSignal<Map<string, Cumulative>>(new Map())
     const [streams, setStreams] = createSignal<Map<string, StreamState>>(new Map())
-    const [lastTPS, setLastTPS] = createSignal(0)
-    const [lastAvgTPS, setLastAvgTPS] = createSignal(0)
-    const [currentInput, setCurrentInput] = createSignal(0)
-    const [currentOutput, setCurrentOutput] = createSignal(0)
     const partText = new Map<string, string>()
+
+    function loadFromKV(sid: string): Cumulative {
+      if (!api.kv.ready) return emptyCumulative()
+      return api.kv.get<Cumulative>(kvKey(sid)) ?? emptyCumulative()
+    }
+
+    function saveToKV(sid: string, t: Cumulative) {
+      if (api.kv.ready) api.kv.set(kvKey(sid), t)
+    }
 
     function recordDelta(sid: string, delta: number) {
       if (delta <= 0) return
@@ -109,25 +119,24 @@ const plugin: TuiPluginModule = {
       const info = event.properties.info
       if (info.role !== "assistant") return
       if (!info.time.completed) return
-      const prev = cumulative()
+      const sid = info.sessionID
+      const prev = totals().get(sid) ?? loadFromKV(sid)
       const newInput = info.tokens.input || 0
       const newOutput = info.tokens.output || 0
-      setCurrentInput(newInput - prev.totalInput)
-      setCurrentOutput(newOutput)
-      const prevStream = streams().get(info.sessionID)
-      if (prevStream) {
-        setLastTPS(instantTPS(prevStream.buffer))
-        setLastAvgTPS(avgTPS(prevStream.tokens, prevStream.start))
-      }
+      const prevStream = streams().get(sid)
       const t = {
         totalInput: newInput,
+        currentInput: newInput - prev.totalInput,
         totalOutput: prev.totalOutput + newOutput,
+        currentOutput: newOutput,
         totalCost: prev.totalCost + (info.cost || 0),
         cacheRead: prev.cacheRead + (info.tokens.cache?.read || 0),
+        lastTPS: prevStream ? instantTPS(prevStream.buffer) : 0,
+        lastAvgTPS: prevStream ? avgTPS(prevStream.tokens, prevStream.start) : 0,
       }
-      setCumulative(t)
-      if (api.kv.ready) api.kv.set(KV_KEY, t)
-      setStreams(p => { const n = new Map(p); n.delete(info.sessionID); return n })
+      setTotals(p => { const n = new Map(p); n.set(sid, t); return n })
+      saveToKV(sid, t)
+      setStreams(p => { const n = new Map(p); n.delete(sid); return n })
     }))
 
     disposers.push(api.event.on("session.idle", (event) => {
@@ -141,7 +150,10 @@ const plugin: TuiPluginModule = {
       slots: {
         session_prompt_right(_ctx, props) {
           const sid = props.session_id
-          const c = cumulative
+          const c = createMemo(() => {
+            const m = totals()
+            return m.get(sid) ?? loadFromKV(sid)
+          })
           const s = createMemo(() => streams().get(sid))
           const text = createMemo(() => {
             const cum = c()
@@ -149,11 +161,11 @@ const plugin: TuiPluginModule = {
             const parts: string[] = []
             if (cum.totalInput > 0 || cum.totalOutput > 0) {
               parts.push(`\u2191${fmt(cum.totalInput)}`)
-              if (currentInput() > 0) parts.push(`[${fmt(currentInput())}]`)
+              if (cum.currentInput > 0) parts.push(`[${fmt(cum.currentInput)}]`)
               if (cum.cacheRead > 0) parts.push(`\u21BB ${fmt(cum.cacheRead)}`)
               let output = `\u2193${fmt(cum.totalOutput)}`
               if (stream && stream.tokens > 0) output += ` [${fmt(stream.tokens)}]`
-              else if (currentOutput() > 0) output += ` [${fmt(currentOutput())}]`
+              else if (cum.currentOutput > 0) output += ` [${fmt(cum.currentOutput)}]`
               parts.push(output)
               parts.push(`$${cum.totalCost.toFixed(4)}`)
             }
@@ -163,10 +175,8 @@ const plugin: TuiPluginModule = {
               if (inst > 0) parts.push(`\u26A1${inst.toFixed(0)}`)
               if (avg > 0) parts.push(`\u2205 ${avg.toFixed(0)}`)
             } else if (cum.totalOutput > 0) {
-              const lt = lastTPS()
-              const la = lastAvgTPS()
-              if (lt > 0) parts.push(`\u26A1${lt.toFixed(0)}`)
-              if (la > 0) parts.push(`\u2205 ${la.toFixed(0)}`)
+              if (cum.lastTPS > 0) parts.push(`\u26A1${cum.lastTPS.toFixed(0)}`)
+              if (cum.lastAvgTPS > 0) parts.push(`\u2205 ${cum.lastAvgTPS.toFixed(0)}`)
             }
             return parts.length > 0 ? parts.join(" ") : ""
           })
@@ -184,8 +194,9 @@ const plugin: TuiPluginModule = {
 
     api.lifecycle.onDispose(() => {
       for (const d of disposers) d()
-      if (api.kv.ready) api.kv.set(KV_KEY, cumulative())
+      for (const [sid, t] of totals()) saveToKV(sid, t)
       partText.clear()
+      setTotals(new Map())
       setStreams(new Map())
     })
   },
