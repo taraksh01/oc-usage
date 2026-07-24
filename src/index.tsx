@@ -145,7 +145,7 @@ const plugin: TuiPluginModule = {
               let input = `\u2191${fmt(totals.totalInput)}`
               if (totals.currentInput > 0) input += ` [${fmt(totals.currentInput)}]`
               parts.push(input)
-              if (totals.cacheRead > 0) parts.push(`\u21BB${fmt(totals.cacheRead)}`)
+              if (totals.cacheRead > 0) parts.push(`\u21BB ${fmt(totals.cacheRead)}`)
               let output = `\u2193${fmt(totals.totalOutput)}`
               if (totals.currentOutput > 0) output += ` [${fmt(totals.currentOutput)}]`
               else if (stream && stream.tokens > 0) output += ` [${fmt(stream.tokens)}]`
@@ -160,10 +160,10 @@ const plugin: TuiPluginModule = {
               const inst = instantTPS(stream.buffer)
               const avg = avgTPS(stream.tokens, stream.start)
               if (inst > 0) parts.push(`\u26A1${inst.toFixed(0)}`)
-              if (avg > 0) parts.push(`\u2205${avg.toFixed(0)}`)
+              if (avg > 0) parts.push(`\u2205 ${avg.toFixed(0)}`)
             } else if (totals && totals.lastAvgTPS > 0) {
               if (totals.lastTPS > 0) parts.push(`\u26A1${totals.lastTPS.toFixed(0)}`)
-              parts.push(`\u2205${totals.lastAvgTPS.toFixed(0)}`)
+              parts.push(`\u2205 ${totals.lastAvgTPS.toFixed(0)}`)
             }
             return parts.length > 0 ? parts.join(" ") : ""
           })
