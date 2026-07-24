@@ -133,8 +133,8 @@ const plugin: TuiPluginModule = {
     disposers.push(api.event.on("session.idle", (event) => {
       const sid = event.properties.sessionID
       if (!sid) return
-      setTotals(p => { const n = new Map(p); n.delete(sid); return n })
       setStreams(p => { const n = new Map(p); n.delete(sid); return n })
+      currentMessage.delete(sid)
     }))
 
     api.slots.register({
@@ -176,6 +176,10 @@ const plugin: TuiPluginModule = {
 
     api.lifecycle.onDispose(() => {
       for (const d of disposers) d()
+      partText.clear()
+      currentMessage.clear()
+      setTotals(new Map())
+      setStreams(new Map())
     })
   },
 }
