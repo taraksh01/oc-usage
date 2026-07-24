@@ -126,7 +126,7 @@ const plugin: TuiPluginModule = {
       const prevStream = streams().get(sid)
       const t = {
         totalInput: newInput,
-        currentInput: newInput - prev.totalInput,
+        currentInput: Math.max(0, newInput - prev.totalInput),
         totalOutput: prev.totalOutput + newOutput,
         currentOutput: newOutput,
         totalCost: prev.totalCost + (info.cost || 0),
@@ -136,6 +136,8 @@ const plugin: TuiPluginModule = {
       }
       setTotals(p => { const n = new Map(p); n.set(sid, t); return n })
       saveToKV(sid, t)
+      const prefix = `${sid}:${info.id}:`
+      for (const k of partText.keys()) { if (k.startsWith(prefix)) partText.delete(k) }
       setStreams(p => { const n = new Map(p); n.delete(sid); return n })
     }))
 
