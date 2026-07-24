@@ -54,31 +54,17 @@ const plugin: TuiPluginModule = {
     const [streams, setStreams] = createSignal<Map<string, StreamState>>(new Map())
     const partText = new Map<string, string>()
 
-    function getTotals(sid: string): SessionTotals {
-      const m = totals()
-      let t = m.get(sid)
-      if (!t) { t = { totalInput: 0, currentInput: 0, totalOutput: 0, currentOutput: 0, totalCost: 0, currentCost: 0, cacheRead: 0 }; setTotals(p => { const n = new Map(p); n.set(sid, t!); return n }) }
-      return t
-    }
-
-    function getStream(sid: string): StreamState {
-      const m = streams()
-      let s = m.get(sid)
-      if (!s) { s = { tokens: 0, start: 0, buffer: [] }; setStreams(p => { const n = new Map(p); n.set(sid, s!); return n }) }
-      return s
-    }
-
     function recordDelta(sid: string, delta: number) {
       if (delta <= 0) return
-      const s = getStream(sid)
-      if (s.start === 0) s.start = Date.now()
-      s.tokens += delta
+      const prev = streams().get(sid)
       const ts = Date.now()
-      s.buffer.push({ ts, count: delta })
+      const tokens = (prev?.tokens ?? 0) + delta
+      const start = prev?.start ?? ts
+      const buffer = [...(prev?.buffer ?? []), { ts, count: delta }]
       const cutoff = ts - WINDOW_MS
-      while (s.buffer.length > 0 && s.buffer[0].ts < cutoff) s.buffer.shift()
-      if (s.buffer.length > 200) s.buffer.splice(0, s.buffer.length - 200)
-      setStreams(p => { const n = new Map(p); n.set(sid, s); return n })
+      while (buffer.length > 0 && buffer[0].ts < cutoff) buffer.shift()
+      if (buffer.length > 200) buffer.splice(0, buffer.length - 200)
+      setStreams(p => { const n = new Map(p); n.set(sid, { tokens, start, buffer }); return n })
     }
 
     const disposers: Array<() => void> = []
@@ -115,16 +101,18 @@ const plugin: TuiPluginModule = {
       const info = event.properties.info
       if (info.role !== "assistant") return
       if (!info.time.completed) return
-      const t = getTotals(info.sessionID)
+      const prev = totals().get(info.sessionID)
       const newInput = info.tokens.input || 0
       const newOutput = info.tokens.output || 0
-      t.currentInput = newInput - t.totalInput
-      t.totalInput = newInput
-      t.currentOutput = newOutput
-      t.totalOutput += newOutput
-      t.currentCost = info.cost || 0
-      t.totalCost += info.cost || 0
-      t.cacheRead += info.tokens.cache?.read || 0
+      const t = {
+        totalInput: newInput,
+        currentInput: newInput - (prev?.totalInput ?? 0),
+        totalOutput: (prev?.totalOutput ?? 0) + newOutput,
+        currentOutput: newOutput,
+        totalCost: (prev?.totalCost ?? 0) + (info.cost || 0),
+        currentCost: info.cost || 0,
+        cacheRead: (prev?.cacheRead ?? 0) + (info.tokens.cache?.read || 0),
+      }
       setTotals(p => { const n = new Map(p); n.set(info.sessionID, t); return n })
       setStreams(p => { const n = new Map(p); n.delete(info.sessionID); return n })
     }))
