@@ -20,6 +20,8 @@ interface SessionTotals {
   totalCost: number
   currentCost: number
   cacheRead: number
+  lastTPS: number
+  lastAvgTPS: number
 }
 
 interface StreamState {
@@ -101,6 +103,9 @@ const plugin: TuiPluginModule = {
       const info = event.properties.info
       if (info.role !== "assistant") return
       if (!info.time.completed) return
+      const prevStream = streams().get(info.sessionID)
+      const lastTPS = prevStream ? instantTPS(prevStream.buffer) : 0
+      const lastAvgTPS = prevStream ? avgTPS(prevStream.tokens, prevStream.start) : 0
       const prev = totals().get(info.sessionID)
       const newInput = info.tokens.input || 0
       const newOutput = info.tokens.output || 0
@@ -112,6 +117,8 @@ const plugin: TuiPluginModule = {
         totalCost: (prev?.totalCost ?? 0) + (info.cost || 0),
         currentCost: info.cost || 0,
         cacheRead: (prev?.cacheRead ?? 0) + (info.tokens.cache?.read || 0),
+        lastTPS,
+        lastAvgTPS,
       }
       setTotals(p => { const n = new Map(p); n.set(info.sessionID, t); return n })
       setStreams(p => { const n = new Map(p); n.delete(info.sessionID); return n })
@@ -154,6 +161,9 @@ const plugin: TuiPluginModule = {
               const avg = avgTPS(stream.tokens, stream.start)
               if (inst > 0) parts.push(`\u26A1${inst.toFixed(0)}`)
               if (avg > 0) parts.push(`\u2205${avg.toFixed(0)}`)
+            } else if (totals && totals.lastAvgTPS > 0) {
+              if (totals.lastTPS > 0) parts.push(`\u26A1${totals.lastTPS.toFixed(0)}`)
+              parts.push(`\u2205${totals.lastAvgTPS.toFixed(0)}`)
             }
             return parts.length > 0 ? parts.join(" ") : ""
           })
