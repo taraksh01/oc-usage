@@ -21,7 +21,6 @@ interface Cumulative {
   currentOutput: number
   lastTPS: number
   lastAvgTPS: number
-  lastInput: number
 }
 
 interface StreamState {
@@ -50,7 +49,7 @@ function avgTPS(tokens: number, start: number): number {
 }
 
 function emptyCumulative(): Cumulative {
-  return { totalInput: 0, totalOutput: 0, totalCost: 0, cacheRead: 0, currentInput: 0, currentOutput: 0, lastTPS: 0, lastAvgTPS: 0, lastInput: 0 }
+  return { totalInput: 0, totalOutput: 0, totalCost: 0, cacheRead: 0, currentInput: 0, currentOutput: 0, lastTPS: 0, lastAvgTPS: 0 }
 }
 
 function kvKey(sid: string): string {
@@ -63,6 +62,7 @@ const plugin: TuiPluginModule = {
     const [totals, setTotals] = createSignal<Map<string, Cumulative>>(new Map())
     const [streams, setStreams] = createSignal<Map<string, StreamState>>(new Map())
     const partText = new Map<string, string>()
+    const countedMessages = new Set<string>()
 
     function loadFromKV(sid: string): Cumulative {
       if (!api.kv.ready) return emptyCumulative()
@@ -120,21 +120,22 @@ const plugin: TuiPluginModule = {
       const info = event.properties.info
       if (info.role !== "assistant") return
       if (!info.time.completed) return
+      if (countedMessages.has(info.id)) return
+      countedMessages.add(info.id)
       const sid = info.sessionID
       const prev = totals().get(sid) ?? loadFromKV(sid)
       const newInput = info.tokens.input || 0
-      const newOutput = info.tokens.output || 0
+      const newOutput = (info.tokens.output || 0) + (info.tokens.reasoning || 0)
       const prevStream = streams().get(sid)
       const t = {
-        totalInput: Math.max(newInput, prev.totalInput),
-        currentInput: Math.max(0, newInput - (prev.lastInput ?? 0)),
+        totalInput: prev.totalInput + newInput,
+        currentInput: newInput,
         totalOutput: prev.totalOutput + newOutput,
         currentOutput: newOutput,
         totalCost: prev.totalCost + (info.cost || 0),
         cacheRead: prev.cacheRead + (info.tokens.cache?.read || 0),
         lastTPS: prevStream ? instantTPS(prevStream.buffer) : 0,
         lastAvgTPS: prevStream ? avgTPS(prevStream.tokens, prevStream.start) : 0,
-        lastInput: newInput,
       }
       setTotals(p => { const n = new Map(p); n.set(sid, t); return n })
       saveToKV(sid, t)
