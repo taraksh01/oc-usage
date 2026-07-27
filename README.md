@@ -20,7 +20,7 @@ Data persists across restarts via TuiKV.
 ```json
 // ~/.config/opencode/tui.jsonc
 {
-  "plugins": ["oc-usage"]
+  "plugins": ["@taraksh011/oc-usage"]
 }
 ```
 

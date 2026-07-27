@@ -1,5 +1,5 @@
 {
-  "name": "oc-usage",
+  "name": "@taraksh011/oc-usage",
   "version": "1.0.0",
   "description": "OpenCode plugin — live token usage, cost, and TPS display",
   "type": "module",
@@ -19,6 +19,9 @@
   },
   "keywords": ["opencode", "opencode-plugin", "tokens", "tps", "cost"],
   "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
   "author": "Tarak Shaw",
   "repository": {
     "type": "git",
