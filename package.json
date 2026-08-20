@@ -1,6 +1,6 @@
 {
   "name": "@taraksh011/oc-usage",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "OpenCode plugin — live token usage, cost, and TPS display",
   "type": "module",
   "main": "./dist/index.js",
