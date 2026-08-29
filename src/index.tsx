@@ -55,6 +55,141 @@ interface V2TuiContext {
 
 type V2Cleanup = () => void | Promise<void>
 
+// ---------------------------------------------------------------------------
+// Display configuration — each metric can be hidden, cache can show
+// absolute count, percentage, or both.
+// ---------------------------------------------------------------------------
+
+type CacheDisplay = "absolute" | "percentage" | "both"
+
+interface DisplayConfig {
+  showInput: boolean
+  showCache: boolean
+  showOutput: boolean
+  showCost: boolean
+  showInstant: boolean
+  showAverage: boolean
+  cacheDisplay: CacheDisplay
+}
+
+const defaultDisplayConfig: DisplayConfig = {
+  showInput: true,
+  showCache: true,
+  showOutput: true,
+  showCost: true,
+  showInstant: true,
+  showAverage: true,
+  cacheDisplay: "absolute",
+}
+
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null && !Array.isArray(v)
+}
+
+function toBool(v: unknown, fallback: boolean): boolean {
+  return typeof v === "boolean" ? v : fallback
+}
+
+function toCacheDisplay(v: unknown): CacheDisplay {
+  if (v === "percentage" || v === "percent" || v === "pct") return "percentage"
+  if (v === "both") return "both"
+  return "absolute"
+}
+
+/**
+ * Parse user-supplied plugin options into a validated DisplayConfig.
+ * Called at trust boundary (tui.jsonc / cli.json / opencode.jsonc).
+ */
+function resolveConfig(raw: unknown): DisplayConfig {
+  if (!isRecord(raw)) return { ...defaultDisplayConfig }
+  const o = raw as Record<string, unknown>
+  // Support both camel and snake keys for ergonomics
+  const showInput = o.showInput ?? o.show_input ?? o.input
+  const showCache = o.showCache ?? o.show_cache ?? o.cache
+  const showOutput = o.showOutput ?? o.show_output ?? o.output
+  const showCost = o.showCost ?? o.show_cost ?? o.cost
+  const showInstant = o.showInstant ?? o.show_instant ?? o.showInstantTps ?? o.show_instant_tps ?? o.tps ?? o.instant
+  const showAverage = o.showAverage ?? o.show_average ?? o.showAvgTps ?? o.show_avg_tps ?? o.average ?? o.avg
+  const cacheDisplay = o.cacheDisplay ?? o.cache_display ?? o.cacheMode ?? o.cache_mode
+  return {
+    showInput: toBool(showInput, defaultDisplayConfig.showInput),
+    showCache: toBool(showCache, defaultDisplayConfig.showCache),
+    showOutput: toBool(showOutput, defaultDisplayConfig.showOutput),
+    showCost: toBool(showCost, defaultDisplayConfig.showCost),
+    showInstant: toBool(showInstant, defaultDisplayConfig.showInstant),
+    showAverage: toBool(showAverage, defaultDisplayConfig.showAverage),
+    cacheDisplay: toCacheDisplay(cacheDisplay),
+  }
+}
+
+function cachePct(part: number, whole: number): number {
+  const denom = part + whole
+  if (denom <= 0) return 0
+  return (part / denom) * 100
+}
+
+function formatCacheAbsolute(n: number): string {
+  return fmt(n)
+}
+
+function formatCacheParts(cum: Cumulative, cfg: DisplayConfig): string | null {
+  if (!cfg.showCache) return null
+  if (cum.cacheRead <= 0 && cum.currentCache <= 0) return null
+  // total cache string
+  let totalStr: string
+  if (cfg.cacheDisplay === "absolute") {
+    totalStr = formatCacheAbsolute(cum.cacheRead)
+  } else if (cfg.cacheDisplay === "percentage") {
+    const pct = cachePct(cum.cacheRead, cum.totalInput)
+    totalStr = `${pct.toFixed(0)}%`
+  } else {
+    const pct = cachePct(cum.cacheRead, cum.totalInput)
+    totalStr = `${formatCacheAbsolute(cum.cacheRead)} (${pct.toFixed(0)}%)`
+  }
+  let cache = `\u21BB ${totalStr}`
+  if (cum.currentCache > 0) {
+    let curStr: string
+    if (cfg.cacheDisplay === "absolute") {
+      curStr = formatCacheAbsolute(cum.currentCache)
+    } else if (cfg.cacheDisplay === "percentage") {
+      const pct = cachePct(cum.currentCache, cum.currentInput)
+      curStr = `${pct.toFixed(0)}%`
+    } else {
+      const pct = cachePct(cum.currentCache, cum.currentInput)
+      curStr = `${formatCacheAbsolute(cum.currentCache)} (${pct.toFixed(0)}%)`
+    }
+    cache += ` [${curStr}]`
+  } else if (cfg.cacheDisplay !== "absolute" && cum.currentCache === 0 && cum.cacheRead > 0) {
+    // no current cache to show; keep total only
+  }
+  return cache
+}
+
+function buildParts(cum: Cumulative, stream: StreamState | undefined, cfg: DisplayConfig): string {
+  const parts: string[] = []
+  if (cfg.showInput) {
+    parts.push(`\u2191${fmt(cum.totalInput)}`)
+    parts.push(`[${fmt(cum.currentInput)}]`)
+  }
+  const cacheStr = formatCacheParts(cum, cfg)
+  if (cacheStr) parts.push(cacheStr)
+  if (cfg.showOutput) {
+    let output = `\u2193${fmt(cum.totalOutput)}`
+    if (stream && stream.tokens >= 0) output += ` [${fmt(stream.tokens)}]`
+    else output += ` [${fmt(cum.currentOutput)}]`
+    parts.push(output)
+  }
+  if (cfg.showCost) parts.push(`$${cum.totalCost.toFixed(4)}`)
+  if (stream && stream.tokens >= 0) {
+    if (cfg.showInstant) parts.push(`\u26A1${instantTPS(stream.buffer).toFixed(0)}`)
+    if (cfg.showAverage) parts.push(`\u2205 ${avgTPS(stream.tokens, stream.start).toFixed(0)}`)
+  } else {
+    if (cfg.showInstant) parts.push(`\u26A1${cum.lastTPS.toFixed(0)}`)
+    if (cfg.showAverage) parts.push(`\u2205 ${cum.lastAvgTPS.toFixed(0)}`)
+  }
+  return parts.join(" ")
+}
+
 function fmt(n: number): string {
   if (n >= 1_000_000_000_000) return (n / 1_000_000_000_000).toFixed(1) + "T"
   if (n >= 1_000_000_000) return (n / 1_000_000_000).toFixed(1) + "B"
@@ -113,7 +248,8 @@ function kvKey(sid: string): string {
   return `oc-usage/${sid}`
 }
 
-const tuiV1: TuiPluginApi extends never ? never : (api: TuiPluginApi) => Promise<void> = async (api: TuiPluginApi) => {
+const tuiV1: TuiPluginApi extends never ? never : (api: TuiPluginApi, rawOptions?: unknown) => Promise<void> = async (api: TuiPluginApi, rawOptions?: unknown) => {
+  const cfg = resolveConfig(rawOptions)
   const [totals, setTotals] = createSignal<Map<string, Cumulative>>(new Map())
   const [streams, setStreams] = createSignal<Map<string, StreamState>>(new Map())
   const partText = new Map<string, string>()
@@ -217,33 +353,7 @@ const tuiV1: TuiPluginApi extends never ? never : (api: TuiPluginApi) => Promise
           return m.get(sid) ?? loadFromKV(sid)
         })
         const s = createMemo(() => streams().get(sid))
-        const text = createMemo(() => {
-          const cum = c()
-          const stream = s()
-          const parts: string[] = []
-          parts.push(`\u2191${fmt(cum.totalInput)}`)
-          parts.push(`[${fmt(cum.currentInput)}]`)
-          if (cum.cacheRead > 0) {
-            let cache = `\u21BB ${fmt(cum.cacheRead)}`
-            if (cum.currentCache > 0) cache += ` [${fmt(cum.currentCache)}]`
-            parts.push(cache)
-          }
-          let output = `\u2193${fmt(cum.totalOutput)}`
-          if (stream && stream.tokens >= 0) output += ` [${fmt(stream.tokens)}]`
-          else output += ` [${fmt(cum.currentOutput)}]`
-          parts.push(output)
-          parts.push(`$${cum.totalCost.toFixed(4)}`)
-          if (stream && stream.tokens >= 0) {
-            const inst = instantTPS(stream.buffer)
-            const avg = avgTPS(stream.tokens, stream.start)
-            parts.push(`\u26A1${inst.toFixed(0)}`)
-            parts.push(`\u2205 ${avg.toFixed(0)}`)
-          } else {
-            parts.push(`\u26A1${cum.lastTPS.toFixed(0)}`)
-            parts.push(`\u2205 ${cum.lastAvgTPS.toFixed(0)}`)
-          }
-          return parts.length > 0 ? parts.join(" ") : ""
-        })
+        const text = createMemo(() => buildParts(c(), s(), cfg))
         const txt = text()
         return (
           <Show when={txt}>
@@ -271,6 +381,7 @@ const tuiV1: TuiPluginApi extends never ? never : (api: TuiPluginApi) => Promise
 // ---------------------------------------------------------------------------
 
 async function setupV2(ctx: V2TuiContext): Promise<V2Cleanup | void> {
+  const cfg = resolveConfig((ctx as any).options)
   const [totals, setTotals] = createSignal<Map<string, Cumulative>>(new Map())
   const [streams, setStreams] = createSignal<Map<string, StreamState>>(new Map())
   const countedSteps = new Set<string>()
@@ -411,33 +522,7 @@ async function setupV2(ctx: V2TuiContext): Promise<V2Cleanup | void> {
             return m.get(sid) ?? (persistedStore?.entries?.[sid] as Cumulative | undefined) ?? (storeEntries?.[sid] as Cumulative | undefined) ?? emptyCumulative()
           })
           const s = createMemo(() => streams().get(sid))
-          const text = createMemo(() => {
-            const cum = c()
-            const stream = s()
-            const parts: string[] = []
-            parts.push(`\u2191${fmt(cum.totalInput)}`)
-            parts.push(`[${fmt(cum.currentInput)}]`)
-            if (cum.cacheRead > 0) {
-              let cache = `\u21BB ${fmt(cum.cacheRead)}`
-              if (cum.currentCache > 0) cache += ` [${fmt(cum.currentCache)}]`
-              parts.push(cache)
-            }
-            let output = `\u2193${fmt(cum.totalOutput)}`
-            if (stream && stream.tokens >= 0) output += ` [${fmt(stream.tokens)}]`
-            else output += ` [${fmt(cum.currentOutput)}]`
-            parts.push(output)
-            parts.push(`$${cum.totalCost.toFixed(4)}`)
-            if (stream && stream.tokens >= 0) {
-              const inst = instantTPS(stream.buffer)
-              const avg = avgTPS(stream.tokens, stream.start)
-              parts.push(`\u26A1${inst.toFixed(0)}`)
-              parts.push(`\u2205 ${avg.toFixed(0)}`)
-            } else {
-              parts.push(`\u26A1${cum.lastTPS.toFixed(0)}`)
-              parts.push(`\u2205 ${cum.lastAvgTPS.toFixed(0)}`)
-            }
-            return parts.join(" ")
-          })
+          const text = createMemo(() => buildParts(c(), s(), cfg))
           const txt = text()
           return (
             <Show when={txt}>
